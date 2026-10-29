@@ -1,0 +1,187 @@
+import React, { useState, useEffect } from 'react';
+import { StyleSheet, Text, View, TextInput, FlatList, TouchableOpacity, Alert, ActivityIndicator, Modal, ScrollView } from 'react-native';
+import { supabase } from '../config/supabase';
+
+export default function KatalogScreen() {
+  const [produkList, setProdukList] = useState([]);
+  const [keranjang, setKeranjang] = useState([]);
+  const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [modalVisible, setModalVisible] = useState(false);
+
+  const fetchProduk = async () => {
+    try {
+      setLoading(true);
+      const { data, error } = await supabase.from('produk').select('*').order('id', { ascending: true });
+      if (error) Alert.alert('Error Supabase', error.message);
+      else setProdukList(data || []);
+    } catch (err) { console.error(err); } 
+    finally { setLoading(false); }
+  };
+
+  useEffect(() => { fetchProduk(); }, []);
+
+  const filteredData = produkList.filter((item) =>
+    item.nama.toLowerCase().includes(search.toLowerCase())
+  );
+
+  const tambahKeKeranjang = (produk) => {
+    setKeranjang((prevCart) => {
+      const index = prevCart.findIndex((item) => item.id === produk.id);
+      if (index > -1) {
+        const updated = [...prevCart];
+        updated[index].qty += 1;
+        return updated;
+      }
+      return [...prevCart, { ...produk, qty: 1 }];
+    });
+  };
+
+  const kurangiQty = (id) => {
+    setKeranjang((prev) => prev.map((i) => i.id === id ? { ...i, qty: i.qty - 1 } : i).filter((i) => i.qty > 0));
+  };
+
+  const tambahQty = (id) => {
+    setKeranjang((prev) => prev.map((i) => i.id === id ? { ...i, qty: i.qty + 1 } : i));
+  };
+
+  const hapusItem = (id) => {
+    setKeranjang((prev) => prev.filter((i) => i.id !== id));
+  };
+
+  const totalItem = keranjang.reduce((acc, i) => acc + i.qty, 0);
+  const totalHarga = keranjang.reduce((acc, i) => acc + i.harga * i.qty, 0);
+
+  const handleCheckout = async () => {
+    if (keranjang.length === 0) return;
+    try {
+      setLoading(true);
+      const { data: trxData, error: trxError } = await supabase.from('transaksi').insert([{ total_harga: totalHarga }]).select().single();
+      if (trxError) throw trxError;
+
+      const detailPayload = keranjang.map((item) => ({
+        transaksi_id: trxData.id,
+        produk_id: item.id,
+        jumlah: item.qty,
+        subtotal: item.harga * item.qty,
+      }));
+
+      const { error: detailError } = await supabase.from('detail_transaksi').insert(detailPayload);
+      if (detailError) throw detailError;
+
+      Alert.alert('Transaksi Berhasil!', `No. Transaksi: #${trxData.id}\nTotal: Rp ${totalHarga.toLocaleString('id-ID')}`);
+      setKeranjang([]);
+      setModalVisible(false);
+    } catch (err) {
+      Alert.alert('Gagal Checkout', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <View style={styles.container}>
+      <TextInput style={styles.searchInput} placeholder="Cari produk..." value={search} onChangeText={setSearch} />
+
+      {loading ? (
+        <ActivityIndicator size="large" color="#228be6" style={{ marginTop: 20 }} />
+      ) : (
+        <FlatList
+          data={filteredData}
+          keyExtractor={(item) => item.id.toString()}
+          renderItem={({ item }) => (
+            <View style={styles.productCard}>
+              <View>
+                <Text style={styles.productName}>{item.nama}</Text>
+                <Text style={styles.productPrice}>Rp {item.harga.toLocaleString('id-ID')}</Text>
+              </View>
+              <TouchableOpacity style={styles.buyButton} onPress={() => tambahKeKeranjang(item)}>
+                <Text style={styles.buyButtonText}>+ Tambah</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        />
+      )}
+
+      <View style={styles.cartBar}>
+        <Text style={styles.cartBarText}>{totalItem} Item | Rp {totalHarga.toLocaleString('id-ID')}</Text>
+        <TouchableOpacity style={styles.cartButton} onPress={() => setModalVisible(true)}>
+          <Text style={styles.cartButtonText}>🛒 Lihat Keranjang</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Modal visible={modalVisible} animationType="slide" transparent={false}>
+        <View style={styles.modalContainer}>
+          <Text style={styles.modalTitle}>Keranjang Belanja</Text>
+          {keranjang.length === 0 ? (
+            <View style={styles.emptyCart}><Text style={styles.emptyText}>Keranjang kosong.</Text></View>
+          ) : (
+            <ScrollView style={{ flex: 1 }}>
+              {keranjang.map((item) => (
+                <View key={item.id} style={styles.cartItemCard}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.cartItemName}>{item.nama}</Text>
+                    <Text style={styles.cartItemPrice}>Rp {item.harga.toLocaleString('id-ID')} x {item.qty}</Text>
+                  </View>
+                  <View style={styles.qtyControl}>
+                    <TouchableOpacity style={styles.btnQty} onPress={() => kurangiQty(item.id)}><Text style={styles.btnQtyText}>-</Text></TouchableOpacity>
+                    <Text style={styles.qtyText}>{item.qty}</Text>
+                    <TouchableOpacity style={styles.btnQty} onPress={() => tambahQty(item.id)}><Text style={styles.btnQtyText}>+</Text></TouchableOpacity>
+                    <TouchableOpacity style={styles.btnHapus} onPress={() => hapusItem(item.id)}><Text>🗑️</Text></TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+
+          <View style={styles.modalFooter}>
+            <View style={styles.totalRow}>
+              <Text style={styles.totalLabel}>Total Bayar:</Text>
+              <Text style={styles.totalValue}>Rp {totalHarga.toLocaleString('id-ID')}</Text>
+            </View>
+            <TouchableOpacity style={[styles.checkoutButton, keranjang.length === 0 && { backgroundColor: '#ccc' }]} disabled={keranjang.length === 0} onPress={handleCheckout}>
+              <Text style={styles.checkoutText}>Checkout & Simpan Transaksi</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.closeButton} onPress={() => setModalVisible(false)}>
+              <Text style={styles.closeText}>Tutup</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1, padding: 15, backgroundColor: '#f8f9fa' },
+  searchInput: { backgroundColor: '#fff', padding: 10, borderRadius: 8, borderWidth: 1, borderColor: '#ddd', marginBottom: 10 },
+  productCard: { backgroundColor: '#fff', padding: 12, borderRadius: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, borderWidth: 1, borderColor: '#eee' },
+  productName: { fontSize: 14, fontWeight: '600' },
+  productPrice: { color: '#666', marginTop: 2, fontSize: 13 },
+  buyButton: { backgroundColor: '#228be6', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6 },
+  buyButtonText: { color: '#fff', fontWeight: 'bold' },
+  cartBar: { backgroundColor: '#1864ab', padding: 12, borderRadius: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  cartBarText: { color: '#fff', fontWeight: 'bold' },
+  cartButton: { backgroundColor: '#fff', paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6 },
+  cartButtonText: { color: '#1864ab', fontWeight: 'bold' },
+  modalContainer: { flex: 1, padding: 20, backgroundColor: '#fff' },
+  modalTitle: { fontSize: 20, fontWeight: 'bold', marginBottom: 15 },
+  emptyCart: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  emptyText: { color: '#888' },
+  cartItemCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10, borderBottomWidth: 1, borderColor: '#eee' },
+  cartItemName: { fontWeight: 'bold' },
+  cartItemPrice: { color: '#666', fontSize: 12 },
+  qtyControl: { flexDirection: 'row', alignItems: 'center' },
+  btnQty: { backgroundColor: '#e9ecef', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 4 },
+  btnQtyText: { fontWeight: 'bold' },
+  qtyText: { marginHorizontal: 8, fontWeight: 'bold' },
+  btnHapus: { marginLeft: 10 },
+  modalFooter: { borderTopWidth: 1, borderColor: '#eee', paddingTop: 15 },
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15 },
+  totalLabel: { fontWeight: 'bold' },
+  totalValue: { fontSize: 18, fontWeight: 'bold', color: '#2b8a3e' },
+  checkoutButton: { backgroundColor: '#2b8a3e', padding: 14, borderRadius: 8, alignItems: 'center', marginBottom: 8 },
+  checkoutText: { color: '#fff', fontWeight: 'bold' },
+  closeButton: { padding: 12, alignItems: 'center' },
+  closeText: { color: '#e03131', fontWeight: 'bold' },
+});
